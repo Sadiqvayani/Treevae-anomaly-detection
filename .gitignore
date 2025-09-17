@@ -149,3 +149,7 @@ dataset/*
 data/*
 logs/*
 datasets/*
+*.txt
+treevae_env/
+*.out
+*.err
