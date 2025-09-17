@@ -165,7 +165,7 @@ def dendrogram_purity(tree_root, ground_truth, ind_samples_of_leaves):
 			purity += one_div_total_n_of_pairs * label_freq / node_total_dp_count * label_pairs # (1/n_all_pairs) * purity(=n_samples_of_this_class_in_node/n_samples) * n_class_pairs_with_this_node_being_least_common_ancestor(this last term represents sum over pairs with this node being least common ancestor)
 		return node_per_label_frequencies, node_total_dp_count
 
-	calculate_purity(tree_root, 0)
+	calculate_purity(tree_root, 0) 
 	return purity
 
 

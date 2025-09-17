@@ -25,33 +25,33 @@ class TreeVAE(nn.Module):
         ----------
         activation : str
             The name of the activation function for the reconstruction loss [sigmoid, mse]
-        loss : models.losses
+        loss : models.losses 
             The loss function used by the decoder to reconstruct the input
-        alpha : float
-            KL-annealing weight initialization
-        encoded_sizes : list
+        alpha : float                   
+            KL-annealing weight initialization 
+        encoded_sizes : list                   
             A list of latent dimensions for each depth of the tree from the bottom to the root
-        hidden_layers : float
+        hidden_layers : float    
             A list of hidden units number for the MLP transformations for each depth of the tree from bottom to root
         depth : int
             The depth of the tree (root has depth 0 and a root with two leaves has depth 1)
         inp_shape : int
             The total dimensions of the input data (if images of 32x32 then 32x32x3)
-        augment : bool
+        augment : bool  
              Whether to use contrastive learning through augmentation, if False no augmentation is used
-        augmentation_method : str
+        augmentation_method : str  
             The type of augmentation method used
-        aug_decisions_weight : str
+        aug_decisions_weight : str  
             The weight of the contrastive loss used in the decisions
-        return_x : float
+        return_x : float   
             Whether to return the input in the return dictionary of the forward method
         return_elbo : float
             Whether to return the sample-specific elbo in the return dictionary of the forward method
         return_bottomup : float
             Whether to return the list of bottom-up transformations (including encoder)
-        bottom_up : str
+        bottom_up : str  
             The list of bottom-up transformations [encoder, MLP, MLP, ...] up to the root
-        contrastive_mlp : list
+        contrastive_mlp : list  
             The list of transformations from the bottom-up embeddings to the latent spaces
             in which the contrastive losses are applied
         transformations : list
@@ -59,27 +59,27 @@ class TreeVAE(nn.Module):
         denses : list
             List of dense layers for the sharing of top-down and bottom-up (MLPs) associated with each node of the tree
             from root to bottom (left to right).
-        decisions : list
+        decisions : list  
             List of decisions associated with each node of the tree from root to bottom (left to right)
-        decoders : list
+        decoders : list 
             List of decoders one for each leaf
-        decisions_q : str
+        decisions_q : str  
             List of decisions of the bottom-up associated with each node of the tree from root to bottom (left to right)
         tree : utils.model_utils.Node
-            The root node of the tree
+            The root node of the tree  
 
         Methods
         -------
         forward(x)
             Compute the forward pass of the treeVAE model and return a dictionary of losses and optional outputs
             (like input, bottom-up and sample-specific elbo) when needed.
-        compute_leaves()
+        compute_leaves() 
             Return a list of leaf-nodes from left to right of the current tree (self.tree).
-        compute_depth()
+        compute_depth()    
             Calculate the depth of the given tree (self.tree).
-        attach_smalltree(node, small_model)
+        attach_smalltree(node, small_model) 
             Attach a sub tree (small_model) to the given node of the current tree.
-        compute_reconstruction(x)
+        compute_reconstruction(x)   
             Given the input x, it computes the reconstructions.
         generate_images(n_samples, device)
             Generate n_samples new images by sampling from the root and propagating through the entire tree.
@@ -89,7 +89,7 @@ class TreeVAE(nn.Module):
         """
         Parameters
         ----------
-        kwargs : dict
+        kwargs : dict  
             A dictionary of attributes (see config file).
         """
         super(TreeVAE, self).__init__()

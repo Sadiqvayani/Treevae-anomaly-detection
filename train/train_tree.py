@@ -7,15 +7,15 @@ import gc
 import torch
 import torch.optim as optim
 
+
 from utils.training_utils import train_one_epoch, validate_one_epoch, AnnealKLCallback, Custom_Metrics, \
 	get_ind_small_tree, compute_growing_leaf, compute_pruning_leaf, get_optimizer, predict
 from utils.data_utils import get_gen
 from utils.model_utils import return_list_tree, construct_data_tree
 from models.model import TreeVAE
-from models.model_smalltree import SmallTreeVAE
+from models.model_smalltree import SmallTreeVAE  
 
-
-def run_tree(trainset, trainset_eval, testset, device, configs):
+def run_tree(trainset, trainset_eval, testset, device, configs): 
 	"""
 	Run the TreeVAE model as defined in the config setting. The method will first train a TreeVAE model with initial
 	depth defined in config (initial_depth). After training TreeVAE for epochs=num_epochs, if grow=True then it will
@@ -23,7 +23,7 @@ def run_tree(trainset, trainset_eval, testset, device, configs):
 	attached to the selected leaf of TreeVAE. The resulting TreeVAE will then grow at each step and will be finetuned
 	throughout the growing procedure for num_epochs_intermediate_fulltrain and at the end of the growing procedure for
 	num_epochs_finetuning.
-
+				
 	Parameters
 	----------
 	trainset: torch.utils.data.Dataset
@@ -42,6 +42,7 @@ def run_tree(trainset, trainset_eval, testset, device, configs):
 	models.model.TreeVAE
 		The trained TreeVAE model
 	"""
+
 
 	graph_mode = not configs['globals']['eager_mode']
 	gen_train = get_gen(trainset, configs, validation=False, shuffle=True)
@@ -70,7 +71,7 @@ def run_tree(trainset, trainset_eval, testset, device, configs):
 
 	################################# TRAINING TREEVAE with depth defined in config #################################
 	
-	# Training the initial tree
+	# Training the initial tree 
 	for epoch in range(configs['training']['num_epochs']):  # loop over the dataset multiple times
 		train_one_epoch(gen_train, model, optimizer, metrics_calc_train, epoch, device)
 		validate_one_epoch(gen_test, model, metrics_calc_val, epoch, device)
@@ -86,10 +87,10 @@ def run_tree(trainset, trainset_eval, testset, device, configs):
 	grow = configs['training']['grow']
 	initial_depth = configs['training']['initial_depth']
 	max_depth = len(configs['training']['mlp_layers']) - 1
-	if initial_depth >= max_depth:
-		grow = False
-	growing_iterations = 0
-	while grow and growing_iterations < 150:
+	if initial_depth >= max_depth: 
+		grow = False  
+	growing_iterations = 0 
+	while grow and growing_iterations < 150:  
 
 		# full model finetuning during growing after every 3 splits
 		if configs['training']['num_epochs_intermediate_fulltrain']>0:

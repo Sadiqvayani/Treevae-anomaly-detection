@@ -12,18 +12,18 @@ from utils.training_utils import calc_aug_loss
 class SmallTreeVAE(nn.Module):
     """
         A class used to represent a sub-tree VAE with one root and two children.
-
+                
         SmallTreeVAE specifies a sub-tree of TreeVAE with one root and two children. It is used in the
         growing procedure of TreeVAE. At each growing step a new SmallTreeVAE is attached to a leaf of TreeVAE and
-        trained separately to reduce computational time.
-
-        Attributes
+        trained separately to reduce computational time.                               
+                                                                           
+        Attributes    
         ----------
-        activation : str
+        activation : str  
             The name of the activation function for the reconstruction loss [sigmoid, mse]
-        loss : models.losses
+        loss : models.losses  
             The loss function used by the decoder to reconstruct the input
-        alpha : float
+        alpha : float 
             KL-annealing weight initialization
         depth : int
             The depth at which the sub-tree will be attached (root has depth 0 and a root with two leaves has depth 1)
@@ -76,12 +76,12 @@ class SmallTreeVAE(nn.Module):
 
         encoded_sizes = self.kwargs['latent_dim']
         hidden_layers = self.kwargs['mlp_layers']
-        self.depth = depth
+        self.depth = depth 
         encoded_size_gen = encoded_sizes[-(self.depth+1):-(self.depth-1)]  # e.g. encoded_size_gen = 32,16, depth 2
         self.encoded_size = encoded_size_gen[::-1]  # self.encoded_size = 32,16 => 16,32
         layers_gen = hidden_layers[-(self.depth+1):-(self.depth-1)]  # e.g. encoded_sizes 256,128,64, depth 2
         self.hidden_layer = layers_gen[::-1]  # encoded_size_gen = 256,128 => 128,256
-
+                           
         self.inp_shape = self.kwargs['inp_shape']
         self.augment = self.kwargs['augment']
         self.augmentation_method = self.kwargs['augmentation_method']

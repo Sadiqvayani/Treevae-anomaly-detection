@@ -19,6 +19,7 @@ def train_one_epoch(train_loader, model, optimizer, metrics_calc, epoch_idx, dev
     """
     Train TreeVAE or SmallTreeVAE model for one epoch.
 
+    
     Parameters
     ----------
     train_loader: DataLoader
@@ -39,7 +40,7 @@ def train_one_epoch(train_loader, model, optimizer, metrics_calc, epoch_idx, dev
         The SmallTreeVAE model (which is then attached to a selected leaf of TreeVAE)
     ind_leaf: int
         The index of the TreeVAE leaf where the small_model will be attached
-    """
+    """ 
     if train_small_tree:
         # if we train the small tree, then the full tree is frozen
         model.eval()
@@ -47,7 +48,7 @@ def train_one_epoch(train_loader, model, optimizer, metrics_calc, epoch_idx, dev
         model.return_bottomup[0] = True
         model.return_x[0] = True
         alpha = small_model.alpha
-    else:
+    else: 
         # otherwise we are training the full tree
         model.train()
         alpha = model.alpha
@@ -155,6 +156,7 @@ def validate_one_epoch(test_loader, model, metrics_calc, epoch_idx, device, test
         model.return_bottomup[0] = False
         model.return_x[0] = False
 
+
     # Calculate and log metrics
     metrics = metrics_calc.compute()
     if not test:
@@ -174,6 +176,7 @@ def validate_one_epoch(test_loader, model, metrics_calc, epoch_idx, device, test
 def predict(loader, model, device, *return_flags):
     model.eval()
 
+
     if 'bottom_up' in return_flags:
         model.return_bottomup[0] = True
     if 'X_aug' in return_flags:
@@ -192,6 +195,7 @@ def predict(loader, model, device, *return_flags):
         'elbo': lambda: move_to(outputs['elbo_samples'], 'cpu'),
         'rec_loss': lambda: move_to(outputs['rec_loss'], 'cpu')
     }
+
 
     with torch.no_grad():
         for batch_idx, (inputs, labels) in enumerate(tqdm(loader)):
@@ -465,7 +469,6 @@ def get_optimizer(model, configs):
                            weight_decay=configs['training']['weight_decay'])
     return optimizer
 
-
 class Custom_Metrics(Metric):
     def __init__(self, device):
         super().__init__()
@@ -497,7 +500,7 @@ class Custom_Metrics(Metric):
         self.y_true.append(y_true)
         self.y_pred.append(y_pred)
 
-    def compute(self):
+    def compute(self): 
         self.y_true = torch.cat(self.y_true, dim=0)
         self.y_pred = torch.cat(self.y_pred, dim=0)
         nmi = normalized_mutual_info_score(self.y_true.cpu().numpy(), self.y_pred.cpu().numpy())

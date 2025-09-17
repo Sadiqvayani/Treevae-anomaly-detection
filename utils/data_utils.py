@@ -34,16 +34,60 @@ def get_data(configs):
 
 	data_path = './data/'
 
+	# Testing for anomalies 
 	if data_name == 'mnist':
 		reset_random_seeds(configs['globals']['seed'])
 		full_trainset = torchvision.datasets.MNIST(root=data_path, train=True, download=True, transform=T.ToTensor())
 		full_testset = torchvision.datasets.MNIST(root=data_path, train=False, download=True, transform=T.ToTensor())
 
-		# get only num_clusters digits
-		indx_train, indx_test = select_subset(full_trainset.targets, full_testset.targets, n_classes)
+		# Check if we need to exclude a specific digit for MNIST
+		exclude_digit = configs['data'].get('exclude_digit', None)
+		n_classes = configs['data']['num_clusters_data']
+
+		if exclude_digit is not None:
+			###################################################################
+			# SPECIAL CASE: Exclude a digit from training but not from testing
+			###################################################################
+			print(f"Excluding digit {exclude_digit} from training/validation. It will be included in the test set for anomaly detection.")
+
+			# 1. Create the list of digits we WILL use for training
+			all_digits = np.unique(full_trainset.targets)
+			digits_for_training = [i for i in all_digits if i != exclude_digit]
+			
+			# Ensure we have the correct number of classes after exclusion
+			if len(digits_for_training) != n_classes:
+				raise ValueError(f"Excluding digit {exclude_digit} would leave {len(digits_for_training)} classes, but num_classes is set to {n_classes}. Adjust num_classes in config.")
+
+			# 2. Create the TRAINING indices by selecting only the chosen digits
+			indx_train = np.array([], dtype=int)
+			for i in digits_for_training:
+				indx_train = np.append(indx_train, np.where(full_trainset.targets == i)[0])
+
+			# 3. Create the TEST indices. DO NOT EXCLUDE THE DIGIT.
+			# We want the full test set, including the anomaly.
+			# We will create the official test set from ALL classes.
+			indx_test = np.arange(len(full_testset)) # This includes EVERY test sample (0-9)
+
+		else:
+			# ORIGINAL BEHAVIOR: Use the standard function for random selection
+			indx_train, indx_test = select_subset(full_trainset.targets, full_testset.targets, n_classes)
+
+		# Create the datasets
 		trainset = Subset(full_trainset, indx_train)
-		trainset_eval = Subset(full_trainset, indx_train)
-		testset = Subset(full_testset, indx_test)
+		trainset_eval = Subset(full_trainset, indx_train) # Validation uses the same indices as training
+		testset = Subset(full_testset, indx_test) # Test set now contains ALL digits, including the excluded one.
+
+
+	# if data_name == 'mnist':
+	# 	reset_random_seeds(configs['globals']['seed'])
+	# 	full_trainset = torchvision.datasets.MNIST(root=data_path, train=True, download=True, transform=T.ToTensor())
+	# 	full_testset = torchvision.datasets.MNIST(root=data_path, train=False, download=True, transform=T.ToTensor())
+
+	# 	# get only num_clusters digits
+	# 	indx_train, indx_test = select_subset(full_trainset.targets, full_testset.targets, n_classes)
+	# 	trainset = Subset(full_trainset, indx_train)
+	# 	trainset_eval = Subset(full_trainset, indx_train)
+	# 	testset = Subset(full_testset, indx_test)
 
 
 	elif data_name == 'fmnist':

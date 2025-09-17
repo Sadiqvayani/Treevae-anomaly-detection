@@ -24,7 +24,7 @@ def run_experiment(configs):
 
 	Parameters
 	----------
-	configs: dict
+	configs: dict  
 		The config setting for training and validating TreeVAE defined in configs or in the command line.
 	"""
 	# Setting device on GPU if available, else CPU
@@ -65,7 +65,10 @@ def run_experiment(configs):
 		raise ValueError('wandb needs to be set to online, offline or disabled.')
 
 	# Reproducibility
-	reset_random_seeds(configs['globals']['seed'])
+	reset_random_seeds(configs['globals']['seed']) 
+	
+	#changed due to avoid reproducibility
+	# reset_random_seeds(configs['seed'])
 
 	# Generate a new dataset each run
 	trainset, trainset_eval, testset = get_data(configs)
@@ -80,8 +83,9 @@ def run_experiment(configs):
 
 	# Evaluation of TreeVAE
 	print("\n" * 2)
-	print("Evaluation")
+	print("Evaluation")  
 	print("\n" * 2)
 	val_tree(trainset_eval, testset, model, device, experiment_path, configs)
 	wandb.finish(quiet=True)
-	return
+	return 
+

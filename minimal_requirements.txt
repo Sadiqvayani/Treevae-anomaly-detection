@@ -1,6 +1,6 @@
 attrs==22.1.0
-cudatoolkit==11.7 # conda install cudatoolkit=11.7 -c pytorch -c nvidia
-cudnn==8.9.2.26
+# cudatoolkit==11.7 # conda install cudatoolkit=11.7 -c pytorch -c nvidia
+# cudnn==8.9.2.26
 numpy==1.23.4
 Pillow==9.3.0
 python==3.9.15 # Do this first

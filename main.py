@@ -57,6 +57,13 @@ def main():
     configs = prepare_config(args, project_dir)
     run_experiment(configs)
 
+    print(f"🔁 Running experiment with seed from config: {configs['globals']['seed']}")
+
 
 if __name__ == "__main__":
-    main()
+    main() 
+    
+
+
+
+

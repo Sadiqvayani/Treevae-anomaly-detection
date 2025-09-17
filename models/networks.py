@@ -11,7 +11,7 @@ def actvn(x):
 
 class EncoderSmall(nn.Module):
     def __init__(self, input_shape, output_shape):
-        super(EncoderSmall, self).__init__()
+        super(EncoderSmall, self).__init__() 
 
         self.dense1 = nn.Linear(in_features=input_shape, out_features=4*output_shape, bias=False)
         self.bn1 = nn.BatchNorm1d(4*output_shape)
@@ -23,7 +23,7 @@ class EncoderSmall(nn.Module):
         self.bn4 = nn.BatchNorm1d(output_shape)
 
     def forward(self, inputs):
-        x = self.dense1(inputs)
+        x = self.dense1(inputs) 
         x = self.bn1(x)
         x = actvn(x)
         x = self.dense2(x)

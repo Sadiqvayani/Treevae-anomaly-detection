@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 
 def loss_reconstruction_binary(x, x_decoded_mean, weights):
-    x = torch.flatten(x, start_dim=1)
+    x = torch.flatten(x, start_dim=1) 
     x_decoded_mean = [torch.flatten(decoded_leaf, start_dim=1) for decoded_leaf in x_decoded_mean]
     loss = torch.sum(
         torch.stack([weights[i] *
@@ -31,4 +31,7 @@ def loss_reconstruction_cov_mse_eval(x, x_decoded_mean, weights):
     for i in range(len(x_decoded_mean)):
         x_dist = torch.distributions.multivariate_normal.MultivariateNormal(loc=torch.clamp(x_decoded_mean[i],0,1), covariance_matrix=scale)   
         logpx = logpx + weights[i] * x_dist.log_prob(x)
-    return logpx
+    return logpx  
+
+
+
