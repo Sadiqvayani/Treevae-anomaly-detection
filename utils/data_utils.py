@@ -34,60 +34,25 @@ def get_data(configs):
 
 	data_path = './data/'
 
-	# Testing for anomalies 
 	if data_name == 'mnist':
 		reset_random_seeds(configs['globals']['seed'])
 		full_trainset = torchvision.datasets.MNIST(root=data_path, train=True, download=True, transform=T.ToTensor())
 		full_testset = torchvision.datasets.MNIST(root=data_path, train=False, download=True, transform=T.ToTensor())
 
-		# Check if we need to exclude a specific digit for MNIST
-		exclude_digit = configs['data'].get('exclude_digit', None)
-		n_classes = configs['data']['num_clusters_data']
-
-		if exclude_digit is not None:
-			###################################################################
-			# SPECIAL CASE: Exclude a digit from training but not from testing
-			###################################################################
-			print(f"Excluding digit {exclude_digit} from training/validation. It will be included in the test set for anomaly detection.")
-
-			# 1. Create the list of digits we WILL use for training
-			all_digits = np.unique(full_trainset.targets)
-			digits_for_training = [i for i in all_digits if i != exclude_digit]
-			
-			# Ensure we have the correct number of classes after exclusion
-			if len(digits_for_training) != n_classes:
-				raise ValueError(f"Excluding digit {exclude_digit} would leave {len(digits_for_training)} classes, but num_classes is set to {n_classes}. Adjust num_classes in config.")
-
-			# 2. Create the TRAINING indices by selecting only the chosen digits
-			indx_train = np.array([], dtype=int)
-			for i in digits_for_training:
-				indx_train = np.append(indx_train, np.where(full_trainset.targets == i)[0])
-
-			# 3. Create the TEST indices. DO NOT EXCLUDE THE DIGIT.
-			# We want the full test set, including the anomaly.
-			# We will create the official test set from ALL classes.
-			indx_test = np.arange(len(full_testset)) # This includes EVERY test sample (0-9)
-
+		# Check if anomaly detection mode is enabled
+		anomaly_digit = configs['data'].get('anomaly_digit', None)
+		if anomaly_digit is not None and anomaly_digit < 10:
+			# Anomaly detection mode: train on 9 digits, test on all 10
+			indx_train, indx_test = select_subset_anomaly(full_trainset.targets, full_testset.targets, anomaly_digit, 10)
+			print(f"Anomaly Detection Mode: Training on digits {[i for i in range(10) if i != anomaly_digit]}, Testing on all digits 0-9")
+			print(f"Anomaly digit: {anomaly_digit}")
 		else:
-			# ORIGINAL BEHAVIOR: Use the standard function for random selection
+			# Normal mode: use all digits for both training and testing
 			indx_train, indx_test = select_subset(full_trainset.targets, full_testset.targets, n_classes)
-
-		# Create the datasets
+		
 		trainset = Subset(full_trainset, indx_train)
-		trainset_eval = Subset(full_trainset, indx_train) # Validation uses the same indices as training
-		testset = Subset(full_testset, indx_test) # Test set now contains ALL digits, including the excluded one.
-
-
-	# if data_name == 'mnist':
-	# 	reset_random_seeds(configs['globals']['seed'])
-	# 	full_trainset = torchvision.datasets.MNIST(root=data_path, train=True, download=True, transform=T.ToTensor())
-	# 	full_testset = torchvision.datasets.MNIST(root=data_path, train=False, download=True, transform=T.ToTensor())
-
-	# 	# get only num_clusters digits
-	# 	indx_train, indx_test = select_subset(full_trainset.targets, full_testset.targets, n_classes)
-	# 	trainset = Subset(full_trainset, indx_train)
-	# 	trainset_eval = Subset(full_trainset, indx_train)
-	# 	testset = Subset(full_testset, indx_test)
+		trainset_eval = Subset(full_trainset, indx_train)
+		testset = Subset(full_testset, indx_test)
 
 
 	elif data_name == 'fmnist':
@@ -387,6 +352,46 @@ def select_subset(y_train, y_test, num_classes):
 		indx_test = np.append(indx_test, np.where(y_test == digits[i])[0])
 	return np.sort(indx_train), np.sort(indx_test)
 
+def select_subset_anomaly(y_train, y_test, anomaly_digit, num_classes):
+    """
+    Select all digits except the anomaly digit for training, and all digits (including anomaly) for testing.
+    If anomaly_digit is None or >= num_classes, use normal mode.
+    
+    Parameters
+    ----------
+    y_train : torch.Tensor
+        Training labels
+    y_test : torch.Tensor  
+        Test labels
+    anomaly_digit : int or None
+        The digit to exclude from training (0-9). If None or >= num_classes, use normal mode.
+    num_classes : int
+        Total number of classes in the dataset
+    
+    Returns
+    -------
+    tuple
+        (train_indices, test_indices) - indices for training and testing
+    """
+    # If no anomaly digit specified or invalid, use normal mode
+    if anomaly_digit is None or anomaly_digit >= num_classes:
+        return select_subset(y_train, y_test, num_classes)
+    
+    # For training: exclude the anomaly digit
+    train_digits = [i for i in range(num_classes) if i != anomaly_digit]
+    
+    indx_train = np.array([], dtype=int)
+    indx_test = np.array([], dtype=int)
+    
+    # Training: only non-anomaly digits
+    for digit in train_digits:
+        indx_train = np.append(indx_train, np.where(y_train == digit)[0])
+    
+    # Testing: ALL digits (including anomaly)
+    for digit in range(num_classes):
+        indx_test = np.append(indx_test, np.where(y_test == digit)[0])
+    
+    return np.sort(indx_train), np.sort(indx_test)
 
 def custom_collate_fn(batch):
 	# Concatenate the augmented versions
