@@ -55,9 +55,24 @@ def main():
 
     args = parser.parse_args()
     configs = prepare_config(args, project_dir)
+    
+    # Print experiment information at the very top, before any training
+    print("="*60)
+    print("🔬 TREEVAE EXPERIMENT CONFIGURATION")
+    print("="*60)
+    print(f"📊 Dataset: {configs['data']['data_name']}")
+    print(f"🎯 Seed: {configs['globals']['seed']}")
+    print(f"🔄 Training Epochs: {configs['training']['num_epochs']}")
+    print(f"🌱 Small Tree Epochs: {configs['training']['num_epochs_smalltree']}")
+    print(f"🔧 Intermediate Full Train Epochs: {configs['training']['num_epochs_intermediate_fulltrain']}")
+    print(f"✨ Finetuning Epochs: {configs['training']['num_epochs_finetuning']}")
+    print(f"📈 Total Epochs: {configs['training']['num_epochs'] + configs['training']['num_epochs_smalltree'] + configs['training']['num_epochs_intermediate_fulltrain'] + configs['training']['num_epochs_finetuning']}")
+    print(f"🌳 Tree Clusters: {configs['training']['num_clusters_tree']}")
+    print(f"📦 Data Clusters: {configs['data']['num_clusters_data']}")
+    print("="*60)
+    print()
+    
     run_experiment(configs)
-
-    print(f"🔁 Running experiment with seed from config: {configs['globals']['seed']}")
 
 
 if __name__ == "__main__":

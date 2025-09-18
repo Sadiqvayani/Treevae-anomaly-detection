@@ -37,12 +37,9 @@ def val_tree(trainset, testset, model, device, experiment_path, configs):
 
     ############ Training set performance ############
 
-    # get the data loader 
-    
+    # get the data loader
     gen_train_eval = get_gen(trainset, configs, validation=True, shuffle=False)
     y_train = trainset.dataset.targets[trainset.indices].numpy()
-
-
     # compute the leaf probabilities
     prob_leaves_train = predict(gen_train_eval, model, device, 'prob_leaves')
     _ = gc.collect()
@@ -61,7 +58,7 @@ def val_tree(trainset, testset, model, device, experiment_path, configs):
 
     ############ Test set performance ############
 
-    # get the data loader 
+    # get the data loader
     gen_test = get_gen(testset, configs, validation=True, shuffle=False)
     y_test = testset.dataset.targets[testset.indices].numpy()
     # compute one validation pass through the test set to log losses
@@ -71,8 +68,6 @@ def val_tree(trainset, testset, model, device, experiment_path, configs):
     # predict the leaf probabilities and the leaves
     node_leaves_test, prob_leaves_test = predict(gen_test, model, device, 'node_leaves', 'prob_leaves')
     _ = gc.collect()
-
-
     # compute the predicted cluster
     y_test_pred = np.squeeze(np.argmax(prob_leaves_test, axis=-1)).numpy()
     # Calculate clustering metrics
@@ -122,74 +117,12 @@ def val_tree(trainset, testset, model, device, experiment_path, configs):
     print("Leaf Purity:", lp)
     print("Digits", np.unique(y_test))
 
-
- ############ PER-SAMPLE LOSS EXTRACTION ############
-    print("\n" + "="*50)
-    print("EXTRACTING PER-SAMPLE RECONSTRUCTION LOSSES")
-    print("="*50)
-    
-    # Create a NEW data loader
-    gen_test_new = get_gen(testset, configs, validation=True, shuffle=False)
-    y_test = testset.dataset.targets[testset.indices].numpy()
-    total_samples = len(testset)
-    
-    print(f"✓ Total test samples: {total_samples}")
-    print(f"✓ Batch size: {configs['training']['batch_size']}")
-    print(f"✓ Expected batches: {total_samples // configs['training']['batch_size']}")
-    
-    # Use our simple reliable function
-    per_sample_losses = get_all_per_sample_losses_simple(model, gen_test_new, device)
-    
-    print(f"✓ Gathered {len(per_sample_losses)} per-sample reconstruction losses")
-    
-    if len(per_sample_losses) != total_samples:
-        print(f"❌ WARNING: Expected {total_samples}, got {len(per_sample_losses)}")
-        print("❌ There might be an issue with the data loader")
-    else:
-        print(f"✓ Successfully gathered all {total_samples} samples!")
-        print(f"✓ Mean rec_loss: {per_sample_losses.mean():.3f} (should match 113.993)")
-        print(f"✓ Min: {per_sample_losses.min():.3f}, Max: {per_sample_losses.max():.3f}")
-    
-    # Save detailed results
-    save_detailed_results(per_sample_losses, y_test, experiment_path)
-
-    # Compute the log-likehood of the test data
-
     # Compute the log-likehood of the test data
     # ATTENTION it might take a while! If not interested disable the setting in configs
     if configs['training']['compute_ll']:
         compute_likelihood(testset, model, device, configs)
     return
 
-def save_detailed_results(rec_losses, labels, output_path):
-    """
-    Save detailed reconstruction losses for all test samples
-    """
-    import csv
-    import os
-    
-    filename = os.path.join(output_path, "detailed_test_results.csv")
-    
-    with open(filename, 'w', newline='') as csvfile:    # noqa: P101
-        writer = csv.writer(csvfile)
-        writer.writerow(['Sample_ID', 'Reconstruction_Loss', 'True_Label'])
-        
-        for i, (rec_loss, label) in enumerate(zip(rec_losses, labels)):
-            writer.writerow([i, rec_loss, label])
-    
-    print(f"✓ Saved detailed results to: {filename}")
-    print(f"✓ Samples in file: {len(rec_losses)}")
-    
-    # Also save a summary
-    summary_filename = os.path.join(output_path, "loss_summary.txt")
-    with open(summary_filename, 'w') as f:
-        f.write(f"Total samples: {len(rec_losses)}\n")
-        f.write(f"Mean reconstruction loss: {rec_losses.mean():.6f}\n")
-        f.write(f"Min reconstruction loss: {rec_losses.min():.6f}\n")
-        f.write(f"Max reconstruction loss: {rec_losses.max():.6f}\n")
-        f.write(f"Std reconstruction loss: {rec_losses.std():.6f}\n")
-    
-    print(f"✓ Saved summary to: {summary_filename}")
 
 def compute_likelihood(testset, model, device, configs):
     """
@@ -257,44 +190,3 @@ def compute_likelihood(testset, model, device, configs):
     else:
         raise NotImplementedError
     return
-
-def get_all_per_sample_losses_simple(model, test_loader, device):
-    """
-    Simple and reliable function to get per-sample losses for entire dataset
-    """
-    model.eval()
-    all_rec_losses = []
-    all_inputs = []
-    
-    with torch.no_grad():
-        for batch_idx, (inputs, labels) in enumerate(tqdm(test_loader, desc="Processing batches")):
-            inputs = inputs.to(device)
-            
-            # Forward pass - get the raw outputs
-            outputs = model(inputs)
-            
-            # DEBUG: Check what's available
-            if batch_idx == 0:
-                print(f"DEBUG: Output keys: {list(outputs.keys())}")
-                if 'elbo_samples' in outputs:
-                    print(f"DEBUG: elbo_samples shape: {outputs['elbo_samples'].shape}")
-            
-            # Try to get per-sample losses
-            if 'elbo_samples' in outputs:
-                # This is the best case - we have per-sample ELBO
-                kl_per_sample = outputs['kl_root'] + outputs['kl_decisions'] + outputs['kl_nodes']
-                rec_loss_per_sample = outputs['elbo_samples'] - kl_per_sample
-                all_rec_losses.extend(rec_loss_per_sample.cpu().numpy())
-            else:
-                # Fallback: Use batch average for all samples in this batch
-                batch_size = inputs.shape[0]
-                batch_avg_rec_loss = outputs['rec_loss'].item()
-                all_rec_losses.extend([batch_avg_rec_loss] * batch_size)
-                print(f"Using batch average for batch {batch_idx}")
-            
-            # Store inputs for debugging
-            all_inputs.extend(inputs.cpu().numpy())
-    
-    print(f"Processed {len(all_rec_losses)} samples across {batch_idx + 1} batches")
-    return np.array(all_rec_losses)
-
