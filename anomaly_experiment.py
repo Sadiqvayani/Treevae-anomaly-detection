@@ -100,76 +100,48 @@ def run_anomaly_detection_experiment(configs, anomaly_digit, device):
     # Set anomaly digit in config - this will be used by get_data
     configs['data']['anomaly_digit'] = anomaly_digit
     
-    # Reduce batch size to 32 for anomaly detection (8 batches of 32 samples)
-    # Original batch size is 256, but we reduce to 32 for more batches
-    # This creates 8 batches for training with 256 samples
+    # Use same batch size as normal TreeVAE (256)
+    # Keep original batch size for consistency with main TreeVAE
     original_batch_size = configs['training']['batch_size']
-    configs['training']['batch_size'] = 32
-    print(f"Reduced batch size from {original_batch_size} to {configs['training']['batch_size']} for anomaly detection")
+    print(f"Using batch size {configs['training']['batch_size']} (same as normal TreeVAE)")
     
     # Get datasets using existing data loading (already handles anomaly detection mode)
     trainset, trainset_eval, testset = get_data(configs)
     
-    # For anomaly detection, we need to use ONLY 32 samples for training (overfitting)
-    # and create a combined test set with those 32 + all anomaly samples
+    # Use same training and test data as normal TreeVAE
+    # Training: ~54,000 samples (9 digits excluding anomaly)
+    # Test: 10,000 samples (all 10 digits including anomaly)
     
-    # Get only 32 samples for training (1 batch for overfitting)
-    from torch.utils.data import Subset
-    train_indices = trainset.indices[:32]  # Use 32 samples (1 batch of 32)
-    trainset = Subset(trainset.dataset, train_indices)  # Override trainset with only 32 samples
-    trainset_eval = Subset(trainset.dataset, train_indices)  # Same 32 samples for eval
+    # Use the full test set as provided by main TreeVAE (10,000 samples, all 10 digits)
+    # No filtering needed - testset already contains all 10 digits including anomaly
     
-    # Filter test set to only include anomaly digit samples
-    # Get the original test dataset to access all test samples
-    original_testset = testset.dataset
-    anomaly_test_indices = []
-    for idx in range(len(original_testset)):
-        if original_testset.targets[idx] == anomaly_digit:
-            anomaly_test_indices.append(idx)
+    print(f"Test samples: {len(testset)} (all 10 digits including anomaly)")
     
-    # Create subset with only anomaly digit samples from test set
-    anomaly_testset = Subset(original_testset, anomaly_test_indices)
-    
-    print(f"Anomaly digit {anomaly_digit} test samples: {len(anomaly_test_indices)}")
-    
-    # Create combined test set: 32 training samples + only anomaly test samples
-    from torch.utils.data import ConcatDataset
-    combined_testset = ConcatDataset([trainset, anomaly_testset])
+    # Use only the test set for anomaly detection analysis (10,000 samples)
+    # No need to combine with training set
+    combined_testset = testset
     
     # Create binary labels for anomaly detection
-    # Training samples are normal (0), test set samples are anomaly (1)
-    anomaly_labels_binary = np.concatenate([
-        np.zeros(len(trainset)),  # Normal samples from training (32)
-        np.ones(len(anomaly_testset))     # Anomaly samples from test set (only anomaly digit)
-    ])
+    # Only test set samples: normal digits (0), anomaly digit (1)
     
-    # Create a custom dataset wrapper for val_tree that mimics Subset behavior
-    class CombinedTestSet:
-        def __init__(self, trainset, anomaly_testset):
-            self.trainset = trainset
-            self.anomaly_testset = anomaly_testset
-            self.dataset = anomaly_testset.dataset  # Use anomaly_testset's dataset as the base
-            # Create combined indices: first 32 from trainset, then anomaly test samples
-            self.indices = np.concatenate([trainset.indices, anomaly_testset.indices])
-        
-        def __len__(self):
-            return len(self.indices)
-        
-        def __getitem__(self, idx):
-            if idx < len(self.trainset):
-                return self.trainset[idx]
-            else:
-                return self.anomaly_testset[idx - len(self.trainset)]
+    # Get true labels from test set to identify anomaly samples
+    test_labels = []
+    for _, labels in testset:
+        test_labels.extend(labels.numpy() if hasattr(labels, 'numpy') else [labels])
+    test_labels = np.array(test_labels)
     
-    # Create the combined test set wrapper for val_tree
-    combined_testset_for_val = CombinedTestSet(trainset, anomaly_testset)
+    # Create binary labels: 0 for normal digits, 1 for anomaly digit
+    anomaly_labels_binary = (test_labels == anomaly_digit).astype(int)
     
-    print(f"Training samples: {len(trainset)} (ONLY 32 for overfitting)")
-    print(f"Batch size: {configs['training']['batch_size']} (reduced from {original_batch_size})")
+    # Use testset directly for val_tree (no need for custom wrapper)
+    combined_testset_for_val = testset
+    
+    print(f"Training samples: {len(trainset)} (9 digits excluding anomaly)")
+    print(f"Batch size: {configs['training']['batch_size']} (same as normal TreeVAE)")
     print(f"Number of training batches: {len(trainset) // configs['training']['batch_size']}")
-    print(f"Test samples (anomaly): {len(anomaly_testset)} (only digit {anomaly_digit})")
-    print(f"Combined test set: {len(combined_testset)}")
-    print(f"Anomaly labels: {np.sum(anomaly_labels_binary)} anomalies out of {len(anomaly_labels_binary)} total")
+    print(f"Test samples: {len(testset)} (all 10 digits including anomaly)")
+    print(f"Anomaly samples: {np.sum(anomaly_labels_binary)} (only digit {anomaly_digit}) out of {len(testset)} test samples")
+    print(f"Normal samples: {len(testset) - np.sum(anomaly_labels_binary)} (9 digits excluding anomaly)")
     
     # Create experiment path for anomaly detection
     from pathlib import Path
@@ -218,6 +190,7 @@ def run_anomaly_detection_experiment(configs, anomaly_digit, device):
     
     # Reproducibility - EXACT same as normal TreeVAE
     from utils.utils import reset_random_seeds
+    configs['globals']['seed'] = 17  # Set seed to 17 as requested
     reset_random_seeds(configs['globals']['seed'])
     
     # Use EXACT same training pipeline as normal TreeVAE
@@ -300,10 +273,10 @@ def run_anomaly_detection_experiment(configs, anomaly_digit, device):
     print("="*60)
     print(f"Dataset: {configs['data']['data_name']}")
     print(f"Anomaly digit: {anomaly_digit}")
-    print(f"Training samples: {len(trainset)} (ONLY 32 for overfitting)")
-    print(f"Combined test samples: {len(combined_testset)}")
-    print(f"  - Normal samples: {len(trainset)} (same 32 as training)")
-    print(f"  - Anomaly samples: {len(anomaly_testset)} (only digit {anomaly_digit})")
+    print(f"Training samples: {len(trainset)} (9 digits excluding anomaly)")
+    print(f"Test samples: {len(testset)} (all 10 digits including anomaly)")
+    print(f"  - Normal samples: {len(testset) - np.sum(anomaly_labels_binary)} (9 digits excluding anomaly)")
+    print(f"  - Anomaly samples: {np.sum(anomaly_labels_binary)} (only digit {anomaly_digit})")
     print(f"AUC Score: {auc_score:.4f}")
     print(f"Results saved to: {output_dir}")
     print(f"TreeVAE experiment path: {experiment_path}")
