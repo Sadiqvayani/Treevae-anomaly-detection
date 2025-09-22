@@ -20,7 +20,7 @@
 # python main.py 
 # export a unique seed each time, or use $SEED from sbatch
 
-python main.py 
+python main.py --seed 17
 
 
 # conda deactivate

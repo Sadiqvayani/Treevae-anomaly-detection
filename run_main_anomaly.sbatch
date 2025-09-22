@@ -20,7 +20,7 @@
 # python main.py 
 # export a unique seed each time, or use $SEED from sbatch
 
-python anomaly_experiment.py 
+python anomaly_experiment.py --seed 17
 
 
 # conda deactivate

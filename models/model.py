@@ -349,6 +349,7 @@ class TreeVAE(nn.Module):
 
         if self.return_elbo:
             return_dict['elbo_samples'] = kl_nodes_tot + kl_decisions_tot + kl_root + rec_losses
+            return_dict['rec_loss_samples'] = rec_losses
 
         if self.return_bottomup: 
             return_dict['bottom_up'] = encoders

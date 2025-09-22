@@ -62,17 +62,17 @@ def get_reconstruction_losses_from_loader(model, data_loader, device):
                 # Restore original setting
                 model.return_elbo = original_return_elbo
                 
-                # Extract per-sample reconstruction loss from elbo_samples
-                if 'elbo_samples' in model_outputs:
+                # Extract per-sample reconstruction loss (pure reconstruction, no KL terms)
+                if 'rec_loss_samples' in model_outputs:
+                    # Use pure reconstruction loss samples (no KL terms)
+                    rec_losses = model_outputs['rec_loss_samples']
+                elif 'elbo_samples' in model_outputs:
+                    # Fallback: if rec_loss_samples not available, use elbo_samples
                     # elbo_samples contains: kl_nodes_tot + kl_decisions_tot + kl_root + rec_losses
-                    # We need to extract just the rec_losses part
                     elbo_samples = model_outputs['elbo_samples']
-                    
-                    # For now, use the elbo_samples as a proxy for reconstruction loss
-                    # This includes KL terms but should be correlated with reconstruction quality
                     rec_losses = elbo_samples
                 else:
-                    # Fallback: use the averaged reconstruction loss
+                    # Final fallback: use the averaged reconstruction loss
                     rec_losses = torch.full((batch_data.size(0),), outputs['rec_loss'].item(), device=device)
                 
             except Exception as e:
@@ -190,7 +190,7 @@ def run_anomaly_detection_experiment(configs, anomaly_digit, device):
     
     # Reproducibility - EXACT same as normal TreeVAE
     from utils.utils import reset_random_seeds
-    configs['globals']['seed'] = 17  # Set seed to 17 as requested
+    # Use the seed from command line arguments or config, not hardcoded
     reset_random_seeds(configs['globals']['seed'])
     
     # Use EXACT same training pipeline as normal TreeVAE
@@ -239,18 +239,19 @@ def run_anomaly_detection_experiment(configs, anomaly_digit, device):
         'leaf_assignment': leaf_assignments
     })
     
-    # Create unique output directory for anomaly results with more precise timestamp
+    # Create unique output directory for anomaly results with new naming convention
     import time
     unique_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # Include milliseconds
-    output_dir = f"eval_datasets/anomaly_results_{configs['data']['data_name']}_digit_{anomaly_digit}_{unique_timestamp}"
+    seed = configs['globals']['seed']
+    output_dir = f"eval_datasets/anomaly_{anomaly_digit}_seed_{seed}_{unique_timestamp}"
     os.makedirs(output_dir, exist_ok=True)
     
-    # Save results CSV with unique timestamp
-    results_file = os.path.join(output_dir, f"anomaly_detection_results_digit_{anomaly_digit}_{unique_timestamp}.csv")
+    # Save results CSV with new naming convention
+    results_file = os.path.join(output_dir, f"anomaly_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv")
     results_df.to_csv(results_file, index=False)
     print(f"Results CSV saved to: {results_file}")
     
-    # Plot and save ROC curve with unique timestamp
+    # Plot and save ROC curve with new naming convention
     plt.figure(figsize=(10, 8))
     plt.plot(fpr, tpr, color='darkorange', lw=3, label=f'ROC curve (AUC = {auc_score:.4f})')
     plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random classifier')
@@ -258,11 +259,11 @@ def run_anomaly_detection_experiment(configs, anomaly_digit, device):
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate', fontsize=12)
     plt.ylabel('True Positive Rate', fontsize=12)
-    plt.title(f'ROC Curve - Anomaly Detection ({configs["data"]["data_name"]}, Digit {anomaly_digit})', fontsize=14)
+    plt.title(f'ROC Curve - Anomaly Detection ({configs["data"]["data_name"]}, Digit {anomaly_digit}, Seed {seed})', fontsize=14)
     plt.legend(loc="lower right", fontsize=12)
     plt.grid(True, alpha=0.3)
     
-    roc_file = os.path.join(output_dir, f"roc_curve_digit_{anomaly_digit}_{unique_timestamp}.png")
+    roc_file = os.path.join(output_dir, f"roc_curve_anomaly_{anomaly_digit}_seed_{seed}_{unique_timestamp}.png")
     plt.savefig(roc_file, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"ROC curve saved to: {roc_file}")
@@ -273,6 +274,7 @@ def run_anomaly_detection_experiment(configs, anomaly_digit, device):
     print("="*60)
     print(f"Dataset: {configs['data']['data_name']}")
     print(f"Anomaly digit: {anomaly_digit}")
+    print(f"Seed: {seed}")
     print(f"Training samples: {len(trainset)} (9 digits excluding anomaly)")
     print(f"Test samples: {len(testset)} (all 10 digits including anomaly)")
     print(f"  - Normal samples: {len(testset) - np.sum(anomaly_labels_binary)} (9 digits excluding anomaly)")
@@ -376,8 +378,8 @@ def main():
         print(f"\n🎉 Experiment completed successfully!")
         print(f"📊 AUC Score: {auc_score:.4f}")
         print(f"📁 Results saved to: {output_dir}")
-        print(f"📄 CSV file: anomaly_detection_results_digit_{args.anomaly_digit}.csv")
-        print(f"📈 ROC curve: roc_curve_digit_{args.anomaly_digit}.png")
+        print(f"📄 CSV file: anomaly_{args.anomaly_digit}_seed_{configs['globals']['seed']}_*.csv")
+        print(f"📈 ROC curve: roc_curve_anomaly_{args.anomaly_digit}_seed_{configs['globals']['seed']}_*.png")
         
     except Exception as e:
         print(f"❌ Error running experiment: {e}")
