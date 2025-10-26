@@ -68,7 +68,7 @@ def run_experiment(configs):
 	reset_random_seeds(configs['globals']['seed']) 
 	
 	#changed due to avoid reproducibility
-	# reset_random_seeds(configs['seed'])
+	# reset_random_seeds(configs['seed'])sadiq 
 
 	# Generate a new dataset each run
 	trainset, trainset_eval, testset = get_data(configs)
