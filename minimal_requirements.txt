@@ -12,3 +12,6 @@ torchmetrics==1.0.3
 torchvision==0.15.2
 tqdm==4.65.0
 wandb==0.13.5
+openpyxl==3.1.2
+pandas==1.5.3
+matplotlib==3.6.2

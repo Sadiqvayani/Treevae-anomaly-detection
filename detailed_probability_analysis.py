@@ -33,28 +33,75 @@ from train.train_tree import run_tree
 
 def get_detailed_probabilities_from_loader(model, data_loader, device, anomaly_labels_binary, true_labels):
     """
-    Get detailed routing probabilities and reconstruction losses for all samples
+    Get detailed probabilities for all samples using data loader
+    Uses the EXACT same method as anomaly_experiment_fmnist.py for reconstruction losses
     """
     model.eval()
-    
-    # Lists to store all data
     all_sample_data = []
     all_node_data = []
     all_leaf_data = []
+    reconstruction_losses = []
+    leaf_assignments = []
     
     with torch.no_grad():
         for batch_idx, (batch_data, batch_labels) in enumerate(tqdm(data_loader, desc="Processing batches")):
             batch_data = batch_data.to(device)
-            batch_labels = batch_labels.to(device)
             
-            # Process each sample in the batch
+            # FIRST: Use the EXACT same method as anomaly_experiment_fmnist.py for reconstruction losses
+            outputs = model(batch_data)
+            
+            # Get leaf assignments using existing output (same as anomaly_experiment_fmnist.py)
+            if 'p_c_z' in outputs:
+                leaf_probs = outputs['p_c_z']
+                batch_leaf_assignments = leaf_probs.argmax(dim=-1).cpu().numpy()
+            else:
+                batch_leaf_assignments = np.zeros(batch_data.size(0))
+            
+            # Get per-sample reconstruction losses (EXACT same method as anomaly_experiment_fmnist.py)
+            try:
+                # Temporarily enable return_elbo to get per-sample losses
+                original_return_elbo = model.return_elbo
+                model.return_elbo = True
+                
+                # Get the model's forward pass outputs
+                model_outputs = model(batch_data)
+                
+                # Restore original setting
+                model.return_elbo = original_return_elbo
+                
+                # Extract per-sample reconstruction loss (pure reconstruction, no KL terms)
+                if 'rec_loss_samples' in model_outputs:
+                    # Use pure reconstruction loss samples (no KL terms)
+                    rec_losses = model_outputs['rec_loss_samples']
+                elif 'elbo_samples' in model_outputs:
+                    # Fallback: if rec_loss_samples not available, use elbo_samples
+                    # elbo_samples contains: kl_nodes_tot + kl_decisions_tot + kl_root + rec_losses
+                    elbo_samples = model_outputs['elbo_samples']
+                    rec_losses = elbo_samples
+                else:
+                    # Final fallback: use the averaged reconstruction loss
+                    rec_losses = torch.full((batch_data.size(0),), outputs['rec_loss'].item(), device=device)
+                
+            except Exception as e:
+                print(f"Warning: Could not compute per-sample reconstruction loss: {e}")
+                # Fallback: use the averaged reconstruction loss
+                rec_losses = torch.full((batch_data.size(0),), outputs['rec_loss'].item(), device=device)
+            
+            reconstruction_losses.extend(rec_losses.cpu().numpy())
+            leaf_assignments.extend(batch_leaf_assignments)
+            
+            # NOW: Process each sample in the batch individually for detailed analysis
             for sample_idx in range(batch_data.size(0)):
                 sample_id = batch_idx * data_loader.batch_size + sample_idx
                 single_sample = batch_data[sample_idx:sample_idx+1]  # Keep batch dimension
                 single_label = batch_labels[sample_idx]
                 
-                # Get detailed outputs for this sample
+                # Get detailed outputs for this sample (routing probabilities, etc.)
                 sample_outputs = get_single_sample_detailed_outputs(model, single_sample, device)
+                
+                # Use the EXACT reconstruction loss from the standard method
+                standard_rec_loss = reconstruction_losses[sample_id]
+                standard_leaf_assignment = leaf_assignments[sample_id]
                 
                 # Determine dataset source and class label
                 if sample_id < len(true_labels):
@@ -73,13 +120,13 @@ def get_detailed_probabilities_from_loader(model, data_loader, device, anomaly_l
                     dataset_source = 'MNIST'
                     class_label = f'MNIST_{true_digit}'
                 
-                # Store sample-level data
+                # Store sample-level data with EXACT same reconstruction loss and leaf assignment
                 sample_data = {
                     'sample_id': sample_id,
                     'true_digit': true_digit,
                     'is_anomaly': is_anomaly,
-                    'final_rec_loss': sample_outputs['final_rec_loss'],
-                    'leaf_assignment': sample_outputs['leaf_assignment'],
+                    'final_rec_loss': standard_rec_loss,  # Use EXACT same reconstruction loss
+                    'leaf_assignment': standard_leaf_assignment,  # Use EXACT same leaf assignment
                     'dataset_source': dataset_source,
                     'class_label': class_label,
                     'num_nodes_processed': len(sample_outputs['node_data']),
@@ -111,8 +158,14 @@ def get_detailed_probabilities_from_loader(model, data_loader, device, anomaly_l
 def get_single_sample_detailed_outputs(model, x, device):
     """
     Get detailed outputs for a single sample including all routing probabilities
+    Uses the EXACT same forward pass as the standard model to ensure identical reconstruction losses
     """
     epsilon = 1e-7
+    
+    # FIRST: Get the standard model output to ensure identical reconstruction loss
+    with torch.no_grad():
+        standard_outputs = model(x)
+        standard_rec_loss = standard_outputs['rec_loss'].item()
     
     # Compute deterministic bottom up
     d = x
@@ -216,17 +269,8 @@ def get_single_sample_detailed_outputs(model, x, device):
             list_nodes.append(
                 {'node': child, 'depth': depth_level + 1, 'prob': prob, 'z_parent_sample': z_sample})
 
-    # Compute final reconstruction loss
-    if len(reconstructions) > 0:
-        # Use the model's loss function
-        if hasattr(model, 'loss'):
-            rec_losses = model.loss(x, reconstructions, leaves_prob)
-            final_rec_loss = rec_losses.item()
-        else:
-            # Fallback: compute MSE loss
-            final_rec_loss = torch.nn.functional.mse_loss(x, reconstructions[0]).item()
-    else:
-        final_rec_loss = 0.0
+    # Use the EXACT same reconstruction loss from standard model forward pass
+    final_rec_loss = standard_rec_loss
     
     # Get leaf assignment (highest probability leaf)
     if len(leaves_prob) > 0:
@@ -363,7 +407,7 @@ def create_combined_testset_with_fmnist(configs):
     return combined_testset, combined_binary_labels, combined_true_labels, mnist_trainset, mnist_trainset_eval
 
 
-def run_detailed_probability_analysis(configs, device):
+def run_detailed_probability_analysis(configs, device, anomaly_digit=0):
     """
     Run detailed probability analysis experiment with Fashion-MNIST
     """
@@ -371,8 +415,12 @@ def run_detailed_probability_analysis(configs, device):
     print("TREEVAE DETAILED PROBABILITY ANALYSIS WITH FASHION-MNIST")
     print("="*60)
     print(f"Dataset: {configs['data']['data_name']} + Fashion-MNIST")
+    print(f"Anomaly Digit: {anomaly_digit}")
     print(f"Device: {device}")
     print("="*60)
+    
+    # Set anomaly digit in config
+    configs['data']['anomaly_digit'] = anomaly_digit
     
     # Create combined test set with Fashion-MNIST
     combined_testset, anomaly_labels_binary, true_labels, trainset, trainset_eval = create_combined_testset_with_fmnist(configs)
@@ -427,13 +475,16 @@ def run_detailed_probability_analysis(configs, device):
     print("STARTING TREEVAE TRAINING")
     print("="*60)
     
-    model = run_tree(trainset, trainset_eval, testset, device, configs)
+    model = run_tree(trainset, trainset_eval, combined_testset, device, configs)
     
     print("\n" + "="*60)
     print("TREEVAE TRAINING COMPLETED - STARTING DETAILED ANALYSIS")
     print("="*60)
     
-    # Get detailed probabilities
+    # Use existing validation function for comprehensive evaluation - EXACT same as anomaly_experiment_fmnist.py
+    val_tree(trainset, combined_testset, model, device, experiment_path, configs)
+    
+    # Get detailed probabilities for analysis
     print("\nCalculating detailed probabilities for all test samples...")
     
     # Create a data loader for the test set
@@ -452,21 +503,60 @@ def run_detailed_probability_analysis(configs, device):
     unique_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
     seed = configs['globals']['seed']
     
-    output_dir = f"eval_datasets/detailed_analysis_seed_{seed}_{unique_timestamp}"
+    output_dir = f"eval_datasets/detailed_analysis_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}"
     os.makedirs(output_dir, exist_ok=True)
     
-    # Save to Excel with multiple sheets
-    excel_file = os.path.join(output_dir, f"detailed_probability_analysis_seed_{seed}_{unique_timestamp}.xlsx")
+    # Save to Excel with multiple sheets (with fallback to CSV)
+    excel_file = os.path.join(output_dir, f"detailed_probability_analysis_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.xlsx")
     
-    with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
-        # Sample-level data
-        sample_df.to_excel(writer, sheet_name='Sample_Summary', index=False)
+    try:
+        # Try to save as Excel
+        with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+            # Sample-level data
+            sample_df.to_excel(writer, sheet_name='Sample_Summary', index=False)
+            
+            # Node-level data (all routing probabilities)
+            node_df.to_excel(writer, sheet_name='Node_Probabilities', index=False)
+            
+            # Leaf-level data (reconstruction losses)
+            leaf_df.to_excel(writer, sheet_name='Leaf_Reconstructions', index=False)
+            
+            # Create summary statistics
+            summary_stats = {
+                'Metric': [
+                    'Total Samples',
+                    'Total Nodes',
+                    'Total Leaves',
+                    'Max Depth',
+                    'Avg Final Rec Loss',
+                    'Std Final Rec Loss',
+                    'Min Final Rec Loss',
+                    'Max Final Rec Loss'
+                ],
+                'Value': [
+                    len(sample_df),
+                    len(node_df),
+                    len(leaf_df),
+                    max(node_df['depth'].max(), leaf_df['depth'].max()) if len(node_df) > 0 or len(leaf_df) > 0 else 0,
+                    sample_df['final_rec_loss'].mean(),
+                    sample_df['final_rec_loss'].std(),
+                    sample_df['final_rec_loss'].min(),
+                    sample_df['final_rec_loss'].max()
+                ]
+            }
+            summary_df = pd.DataFrame(summary_stats)
+            summary_df.to_excel(writer, sheet_name='Summary_Statistics', index=False)
         
-        # Node-level data (all routing probabilities)
-        node_df.to_excel(writer, sheet_name='Node_Probabilities', index=False)
+        print(f"Detailed analysis saved to Excel: {excel_file}")
         
-        # Leaf-level data (reconstruction losses)
-        leaf_df.to_excel(writer, sheet_name='Leaf_Reconstructions', index=False)
+    except ImportError:
+        # Fallback to CSV files if openpyxl is not available
+        print("Warning: openpyxl not available, saving as CSV files instead")
+        
+        # Save each sheet as separate CSV
+        sample_df.to_csv(os.path.join(output_dir, f"sample_summary_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv"), index=False)
+        node_df.to_csv(os.path.join(output_dir, f"node_probabilities_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv"), index=False)
+        leaf_df.to_csv(os.path.join(output_dir, f"leaf_reconstructions_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv"), index=False)
         
         # Create summary statistics
         summary_stats = {
@@ -492,9 +582,9 @@ def run_detailed_probability_analysis(configs, device):
             ]
         }
         summary_df = pd.DataFrame(summary_stats)
-        summary_df.to_excel(writer, sheet_name='Summary_Statistics', index=False)
-    
-    print(f"Detailed analysis saved to: {excel_file}")
+        summary_df.to_csv(os.path.join(output_dir, f"summary_statistics_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv"), index=False)
+        
+        print(f"Detailed analysis saved to CSV files in: {output_dir}")
     
     # Print summary statistics
     print("\n" + "="*60)
@@ -573,6 +663,10 @@ def main():
     parser.add_argument('--config_name', default='mnist', type=str,
                         choices=['mnist', 'fmnist', 'news20', 'omniglot', 'cifar10', 'cifar100', 'celeba'],
                         help='the override file name for config.yml')
+    
+    # Anomaly detection specific arguments
+    parser.add_argument('--anomaly_digit', type=int, default=0, choices=range(10),
+                        help='the digit to use as anomaly (0-9)')
 
     args = parser.parse_args()
     configs = prepare_config(args, project_dir)
@@ -582,9 +676,10 @@ def main():
     
     # Print experiment information
     print("="*60)
-    print("🔬 TREEVAE DETAILED PROBABILITY ANALYSIS")
+    print("🔬 TREEVAE DETAILED PROBABILITY ANALYSIS WITH FASHION-MNIST")
     print("="*60)
-    print(f"📊 Dataset: {configs['data']['data_name']}")
+    print(f"📊 Dataset: {configs['data']['data_name']} + Fashion-MNIST")
+    print(f"🎯 Anomaly Digit: {args.anomaly_digit}")
     print(f"🌱 Seed: {configs['globals']['seed']}")
     print(f"🔄 Training Epochs: {configs['training']['num_epochs']}")
     print(f"🌱 Small Tree Epochs: {configs['training']['num_epochs_smalltree']}")
@@ -598,12 +693,12 @@ def main():
     
     # Run experiment
     try:
-        sample_df, node_df, leaf_df, output_dir = run_detailed_probability_analysis(configs, device)
+        sample_df, node_df, leaf_df, output_dir = run_detailed_probability_analysis(configs, device, args.anomaly_digit)
         
         print(f"\n🎉 Detailed analysis completed successfully!")
         print(f"📁 Results saved to: {output_dir}")
-        print(f"📄 Excel file: detailed_probability_analysis_seed_{configs['globals']['seed']}_*.xlsx")
-        print(f"📊 Sheets: Sample_Summary, Node_Probabilities, Leaf_Reconstructions, Summary_Statistics")
+        print(f"📄 Files: detailed_probability_analysis_digit_{args.anomaly_digit}_seed_{configs['globals']['seed']}_*")
+        print(f"📊 Content: Sample_Summary, Node_Probabilities, Leaf_Reconstructions, Summary_Statistics")
         
     except Exception as e:
         print(f"❌ Error running detailed analysis: {e}")
