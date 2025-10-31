@@ -40,44 +40,25 @@ def get_reconstruction_losses_from_loader(model, data_loader, device):
         for batch_data, batch_labels in data_loader:
             batch_data = batch_data.to(device)
             
-            # Forward pass using existing model
+            # Single forward with return_elbo=True to obtain both batch and per-sample losses
+            original_return_elbo = model.return_elbo
+            model.return_elbo = True
             outputs = model(batch_data)
+            model.return_elbo = original_return_elbo
             
-            # Get leaf assignments using existing output
+            # Leaf assignments from this same forward
             if 'p_c_z' in outputs:
                 leaf_probs = outputs['p_c_z']
                 leaf_assignments.extend(leaf_probs.argmax(dim=-1).cpu().numpy())
             else:
                 leaf_assignments.extend(np.zeros(batch_data.size(0)))
             
-            # Use the model's forward method to get per-sample losses
-            try:
-                # Temporarily enable return_elbo to get per-sample losses
-                original_return_elbo = model.return_elbo
-                model.return_elbo = True
-                
-                # Get the model's forward pass outputs
-                model_outputs = model(batch_data)
-                
-                # Restore original setting
-                model.return_elbo = original_return_elbo
-                
-                # Extract per-sample reconstruction loss (pure reconstruction, no KL terms)
-                if 'rec_loss_samples' in model_outputs:
-                    # Use pure reconstruction loss samples (no KL terms)
-                    rec_losses = model_outputs['rec_loss_samples']
-                elif 'elbo_samples' in model_outputs:
-                    # Fallback: if rec_loss_samples not available, use elbo_samples
-                    # elbo_samples contains: kl_nodes_tot + kl_decisions_tot + kl_root + rec_losses
-                    elbo_samples = model_outputs['elbo_samples']
-                    rec_losses = elbo_samples
-                else:
-                    # Final fallback: use the averaged reconstruction loss
-                    rec_losses = torch.full((batch_data.size(0),), outputs['rec_loss'].item(), device=device)
-                
-            except Exception as e:
-                print(f"Warning: Could not compute per-sample reconstruction loss: {e}")
-                # Fallback: use the averaged reconstruction loss
+            # Per-sample reconstruction losses from this same forward
+            if 'rec_loss_samples' in outputs:
+                rec_losses = outputs['rec_loss_samples']
+            elif 'elbo_samples' in outputs:
+                rec_losses = outputs['elbo_samples']
+            else:
                 rec_losses = torch.full((batch_data.size(0),), outputs['rec_loss'].item(), device=device)
             
             reconstruction_losses.extend(rec_losses.cpu().numpy())

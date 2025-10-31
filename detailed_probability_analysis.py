@@ -35,7 +35,7 @@ def get_detailed_probabilities_from_loader(model, data_loader, device, anomaly_l
     """
     Get detailed probabilities for all samples using data loader
     Uses the EXACT same method as anomaly_experiment_fmnist.py for reconstruction losses
-    """
+    """   
     model.eval()
     all_sample_data = []
     all_node_data = []
@@ -43,12 +43,16 @@ def get_detailed_probabilities_from_loader(model, data_loader, device, anomaly_l
     reconstruction_losses = []
     leaf_assignments = []
     
+    printed_mismatch_count = 0
     with torch.no_grad():
         for batch_idx, (batch_data, batch_labels) in enumerate(tqdm(data_loader, desc="Processing batches")):
             batch_data = batch_data.to(device)
             
-            # FIRST: Use the EXACT same method as anomaly_experiment_fmnist.py for reconstruction losses
+            # FIRST: Single forward with return_elbo=True to mirror anomaly_experiment and get per-sample losses
+            original_return_elbo = model.return_elbo
+            model.return_elbo = True
             outputs = model(batch_data)
+            model.return_elbo = original_return_elbo
             
             # Get leaf assignments using existing output (same as anomaly_experiment_fmnist.py)
             if 'p_c_z' in outputs:
@@ -57,34 +61,12 @@ def get_detailed_probabilities_from_loader(model, data_loader, device, anomaly_l
             else:
                 batch_leaf_assignments = np.zeros(batch_data.size(0))
             
-            # Get per-sample reconstruction losses (EXACT same method as anomaly_experiment_fmnist.py)
-            try:
-                # Temporarily enable return_elbo to get per-sample losses
-                original_return_elbo = model.return_elbo
-                model.return_elbo = True
-                
-                # Get the model's forward pass outputs
-                model_outputs = model(batch_data)
-                
-                # Restore original setting
-                model.return_elbo = original_return_elbo
-                
-                # Extract per-sample reconstruction loss (pure reconstruction, no KL terms)
-                if 'rec_loss_samples' in model_outputs:
-                    # Use pure reconstruction loss samples (no KL terms)
-                    rec_losses = model_outputs['rec_loss_samples']
-                elif 'elbo_samples' in model_outputs:
-                    # Fallback: if rec_loss_samples not available, use elbo_samples
-                    # elbo_samples contains: kl_nodes_tot + kl_decisions_tot + kl_root + rec_losses
-                    elbo_samples = model_outputs['elbo_samples']
-                    rec_losses = elbo_samples
-                else:
-                    # Final fallback: use the averaged reconstruction loss
-                    rec_losses = torch.full((batch_data.size(0),), outputs['rec_loss'].item(), device=device)
-                
-            except Exception as e:
-                print(f"Warning: Could not compute per-sample reconstruction loss: {e}")
-                # Fallback: use the averaged reconstruction loss
+            # Per-sample reconstruction losses from this same forward
+            if 'rec_loss_samples' in outputs:
+                rec_losses = outputs['rec_loss_samples']
+            elif 'elbo_samples' in outputs:
+                rec_losses = outputs['elbo_samples']
+            else:
                 rec_losses = torch.full((batch_data.size(0),), outputs['rec_loss'].item(), device=device)
             
             reconstruction_losses.extend(rec_losses.cpu().numpy())
@@ -96,11 +78,20 @@ def get_detailed_probabilities_from_loader(model, data_loader, device, anomaly_l
                 single_sample = batch_data[sample_idx:sample_idx+1]  # Keep batch dimension
                 single_label = batch_labels[sample_idx]
                 
-                # Get detailed outputs for this sample (routing probabilities, etc.)
-                sample_outputs = get_single_sample_detailed_outputs(model, single_sample, device)
+                # Extract sample-specific outputs from batch forward to avoid re-sampling z
+                # This ensures weighted_sum matches final_rec_loss exactly
+                sample_p_c_z = outputs['p_c_z'][sample_idx:sample_idx+1]  # shape [1, num_leaves]
+                sample_node_leaves = outputs['node_leaves']  # list of dicts (same for all samples in batch)
                 
-                # Use the EXACT reconstruction loss from the standard method
-                standard_rec_loss = reconstruction_losses[sample_id]
+                # Get detailed outputs for this sample using batch forward results
+                sample_outputs = get_single_sample_detailed_outputs(
+                    model, single_sample, device, 
+                    batch_outputs=outputs, 
+                    sample_idx_in_batch=sample_idx
+                )
+                
+                # Use the EXACT reconstruction loss from this batch forward
+                standard_rec_loss = rec_losses[sample_idx].item()
                 standard_leaf_assignment = leaf_assignments[sample_id]
                 
                 # Determine dataset source and class label
@@ -120,6 +111,13 @@ def get_detailed_probabilities_from_loader(model, data_loader, device, anomaly_l
                     dataset_source = 'MNIST'
                     class_label = f'MNIST_{true_digit}'
                 
+                # Optional: print at most 50 mismatches to logs
+                if 'weighted_sum' in sample_outputs:
+                    diff_val = abs(sample_outputs['weighted_sum'] - standard_rec_loss)
+                    if diff_val > 0.1 and printed_mismatch_count < 50:
+                        print(f"Warning: sample_id={sample_id} weighted_sum={sample_outputs['weighted_sum']:.6f} != final_rec_loss={standard_rec_loss:.6f}, diff={diff_val:.6f}")
+                        printed_mismatch_count += 1
+
                 # Store sample-level data with EXACT same reconstruction loss and leaf assignment
                 sample_data = {
                     'sample_id': sample_id,
@@ -130,7 +128,10 @@ def get_detailed_probabilities_from_loader(model, data_loader, device, anomaly_l
                     'dataset_source': dataset_source,
                     'class_label': class_label,
                     'num_nodes_processed': len(sample_outputs['node_data']),
-                    'num_leaves': len(sample_outputs['leaf_data'])
+                    'num_leaves': len(sample_outputs['leaf_data']),
+                    'weighted_sum_leaf_losses': sample_outputs.get('weighted_sum', None),
+                    'weighted_sum_diff': (abs(sample_outputs['weighted_sum'] - standard_rec_loss)
+                                          if 'weighted_sum' in sample_outputs else None)
                 }
                 all_sample_data.append(sample_data)
                 
@@ -155,122 +156,83 @@ def get_detailed_probabilities_from_loader(model, data_loader, device, anomaly_l
     return all_sample_data, all_node_data, all_leaf_data
 
 
-def get_single_sample_detailed_outputs(model, x, device):
+def get_single_sample_detailed_outputs(model, x, device, batch_outputs=None, sample_idx_in_batch=0):
     """
     Get detailed outputs for a single sample including all routing probabilities
-    Uses the EXACT same forward pass as the standard model to ensure identical reconstruction losses
+    Uses batch forward outputs if provided to avoid re-sampling z and ensure exact match with final_rec_loss
     """
     epsilon = 1e-7
     
-    # FIRST: Get the standard model output to ensure identical reconstruction loss
-    with torch.no_grad():
-        standard_outputs = model(x)
-        standard_rec_loss = standard_outputs['rec_loss'].item()
+    if batch_outputs is not None:
+        # Reuse batch forward outputs to avoid re-sampling z
+        standard_outputs = batch_outputs
+        # Extract sample-specific p_c_z from batch
+        p_c_z = batch_outputs['p_c_z'][sample_idx_in_batch:sample_idx_in_batch+1]  # shape [1, num_leaves]
+        node_leaves = batch_outputs['node_leaves']  # same for all samples in batch
+        standard_rec_loss = None  # Will use rec_loss_samples from batch instead
+    else:
+        # Fallback: do a separate forward (will cause slight mismatch due to re-sampling)
+        with torch.no_grad():
+            standard_outputs = model(x)
+            standard_rec_loss = standard_outputs['rec_loss'].item()
+            p_c_z = standard_outputs['p_c_z']  # shape [1, num_leaves]
+            node_leaves = standard_outputs['node_leaves']  # list of dicts with 'prob' and 'z_sample' per leaf
     
-    # Compute deterministic bottom up
-    d = x
-    encoders = []
-    emb_contr = []
-
-    for i in range(0, len(model.hidden_layers)):
-        d, _, _ = model.bottom_up[i](d)
-        encoders.append(d)
-        
-        # Pass through contrastive MLP's if contrastive learning is selected
-        if hasattr(model, 'augmentation_method') and 'instancewise_full' in model.augmentation_method:
-            _, emb_c, _ = model.contrastive_mlp[i](d)
-            emb_contr.append(emb_c)
-        elif hasattr(model, 'augmentation_method') and 'instancewise_first' in model.augmentation_method:
-            if i == 0:
-                _, emb_c, _ = model.contrastive_mlp[i](d)
-                emb_contr.append(emb_c)
-
-    # Create a list of nodes of the tree that need to be processed
-    list_nodes = [{'node': model.tree, 'depth': 0, 'prob': torch.ones(x.size(0), device=device), 'z_parent_sample': None}]
-    
-    # Initialize tracking lists
+    # Build leaf-level data WITHOUT re-sampling: reuse the exact z_sample/prob from standard_outputs
     node_data = []
     leaf_data = []
     leaves_prob = []
     reconstructions = []
-    
-    # Process all nodes
-    while len(list_nodes) != 0:
-        current_node = list_nodes.pop(0)
-        node, depth_level, prob = current_node['node'], current_node['depth'], current_node['prob']
-        z_parent_sample = current_node['z_parent_sample']
+
+    # Get leaves in left-to-right order to access their decoders and depth
+    leaves_list = model.compute_leaves()  # list of {'node': leaf_node, 'depth': depth}
+
+    num_leaves = p_c_z.size(-1)
+    for i in range(num_leaves):
+        leaf_node = leaves_list[i]['node']
+        depth_level = leaves_list[i]['depth']
+        prob_i = p_c_z[:, i]  # tensor shape [1]
         
-        # Access deterministic bottom up mu and sigma hat
-        d = encoders[-(1+depth_level)]
-        z_mu_q_hat, z_sigma_q_hat = node.dense(d)
-
-        # Handle root vs other nodes
-        if depth_level == 0:
-            z_mu_p, z_sigma_p = torch.zeros_like(z_mu_q_hat, device=device), torch.ones_like(z_sigma_q_hat, device=device)
-            z_mu_q, z_sigma_q = z_mu_q_hat, z_sigma_q_hat
+        # Extract sample-specific z_sample from batch results
+        if batch_outputs is not None:
+            # node_leaves[i]['z_sample'] has batch dimension [batch_size, latent_dim], extract specific sample
+            z_sample_batch = node_leaves[i]['z_sample']
+            if z_sample_batch.dim() > 1:
+                # Extract the z_sample for this specific sample in the batch
+                if z_sample_batch.size(0) > 1:
+                    # Batch dimension exists, extract sample-specific z_sample
+                    z_sample_i = z_sample_batch[sample_idx_in_batch:sample_idx_in_batch+1]  # Keep batch dim for decoder
+                else:
+                    z_sample_i = z_sample_batch  # Single sample case
+            else:
+                z_sample_i = z_sample_batch.unsqueeze(0)  # Add batch dimension if needed
         else:
-            _, z_mu_p, z_sigma_p = node.transformation(z_parent_sample)
-            from utils.model_utils import compute_posterior
-            z_mu_q, z_sigma_q = compute_posterior(z_mu_q_hat, z_mu_p, z_sigma_q_hat, z_sigma_p)
+            z_sample_i = node_leaves[i]['z_sample']  # shape [1, latent_dim] for single sample forward
 
-        # Compute sample z
-        z = torch.distributions.Independent(torch.distributions.Normal(z_mu_q, torch.sqrt(z_sigma_q + epsilon)), 1)
-        z_sample = z.rsample()
+        # Record leaf meta
+        leaf_info = {
+            'depth': depth_level,
+            'node_type': 'leaf',
+            'cumulative_prob': prob_i.item(),
+            'leaf_id': i,
+            'node_id': id(leaf_node)
+        }
+        leaf_data.append(leaf_info)
 
-        # If there is a router (internal node)
-        if node.router is not None:
-            # Compute routing probabilities
-            prob_child_left = node.router(z_sample).squeeze()
-            prob_child_left_q = node.routers_q(d).squeeze()
-            
-            # Store node data
-            node_info = {
-                'depth': depth_level,
-                'node_type': 'internal',
-                'cumulative_prob': prob.item(),
-                'routing_prob_left': prob_child_left_q.item(),
-                'routing_prob_right': (1 - prob_child_left_q).item(),
-                'top_down_prob_left': prob_child_left.item(),
-                'top_down_prob_right': (1 - prob_child_left).item(),
-                'node_id': id(node)
-            }
-            node_data.append(node_info)
-            
-            # Add children to processing queue
-            prob_node_left, prob_node_right = prob * prob_child_left_q, prob * (1 - prob_child_left_q)
-            node_left, node_right = node.left, node.right
-            list_nodes.append(
-                {'node': node_left, 'depth': depth_level + 1, 'prob': prob_node_left, 'z_parent_sample': z_sample})
-            list_nodes.append({'node': node_right, 'depth': depth_level + 1, 'prob': prob_node_right,
-                            'z_parent_sample': z_sample})
+        # Recompute reconstruction deterministically from the SAME z_sample used by the forward pass
+        dec = leaf_node.decoder
+        reconstruction = dec(z_sample_i)
+        reconstructions.append(reconstruction)
+        leaves_prob.append(prob_i)
 
-        # If there is a decoder (leaf node)
-        elif node.decoder is not None:
-            # Store leaf data
-            leaf_info = {
-                'depth': depth_level,
-                'node_type': 'leaf',
-                'cumulative_prob': prob.item(),
-                'leaf_id': len(leaves_prob),  # Leaf index
-                'node_id': id(node)
-            }
-            leaf_data.append(leaf_info)
-            
-            # Compute reconstruction
-            dec = node.decoder
-            reconstruction = dec(z_sample)
-            reconstructions.append(reconstruction)
-            leaves_prob.append(prob)
-
-        # Handle pruned nodes (internal nodes with only one child)
-        elif node.router is None and node.decoder is None:
-            node_left, node_right = node.left, node.right
-            child = node_left if node_left is not None else node_right
-            list_nodes.append(
-                {'node': child, 'depth': depth_level + 1, 'prob': prob, 'z_parent_sample': z_sample})
-
-    # Use the EXACT same reconstruction loss from standard model forward pass
-    final_rec_loss = standard_rec_loss
+    # Use the EXACT same reconstruction loss - from batch if provided, otherwise from this forward
+    if batch_outputs is not None and 'rec_loss_samples' in batch_outputs:
+        final_rec_loss = batch_outputs['rec_loss_samples'][sample_idx_in_batch].item()
+    elif standard_rec_loss is not None:
+        final_rec_loss = standard_rec_loss
+    else:
+        # Fallback
+        final_rec_loss = standard_outputs['rec_loss'].item()
     
     # Get leaf assignment (highest probability leaf)
     if len(leaves_prob) > 0:
@@ -280,19 +242,47 @@ def get_single_sample_detailed_outputs(model, x, device):
         leaf_assignment = 0
     
     # Add reconstruction losses to leaf data
+    # Compute individual leaf reconstruction losses using the SAME method as the model
+    # This ensures: sum(cumulative_prob[i] * leaf_rec_loss[i]) == final_rec_loss
+    total_weighted_loss = 0.0
+    
     for i, leaf_info in enumerate(leaf_data):
         if i < len(reconstructions):
-            # Compute individual leaf reconstruction loss
-            leaf_rec_loss = torch.nn.functional.mse_loss(x, reconstructions[i]).item()
+            # Flatten input and reconstruction for loss computation
+            x_flat = torch.flatten(x, start_dim=1)
+            recon_flat = torch.flatten(reconstructions[i], start_dim=1)
+            
+            # Use the same loss function as the model
+            if model.activation == "sigmoid":
+                # Binary cross entropy loss (matches loss_reconstruction_binary)
+                # reduction='none' gives loss per pixel, .sum(dim=-1) sums over all pixels
+                leaf_rec_loss = torch.nn.functional.binary_cross_entropy(
+                    input=recon_flat, target=x_flat, reduction='none'
+                ).sum(dim=-1).item()
+            elif model.activation == "mse":
+                # MSE loss (matches loss_reconstruction_mse)
+                # reduction='none' gives loss per pixel, .sum(dim=-1) sums over all pixels
+                leaf_rec_loss = torch.nn.functional.mse_loss(
+                    input=recon_flat, target=x_flat, reduction='none'
+                ).sum(dim=-1).item()
+            else:
+                # Fallback
+                leaf_rec_loss = torch.nn.functional.mse_loss(x, reconstructions[i]).item()
+            
             leaf_info['rec_loss'] = leaf_rec_loss
+            
+            # Accumulate weighted loss for verification
+            total_weighted_loss += leaves_prob[i].item() * leaf_rec_loss
         else:
             leaf_info['rec_loss'] = 0.0
     
+    # Return results including the weighted sum so the caller can decide on logging
     return {
         'final_rec_loss': final_rec_loss,
         'leaf_assignment': leaf_assignment,
         'node_data': node_data,
-        'leaf_data': leaf_data
+        'leaf_data': leaf_data,
+        'weighted_sum': total_weighted_loss
     }
 
 
@@ -407,9 +397,15 @@ def create_combined_testset_with_fmnist(configs):
     return combined_testset, combined_binary_labels, combined_true_labels, mnist_trainset, mnist_trainset_eval
 
 
-def run_detailed_probability_analysis(configs, device, anomaly_digit=0):
+def run_detailed_probability_analysis(configs, device, anomaly_digit=0, test_fraction=1.0):
     """
     Run detailed probability analysis experiment with Fashion-MNIST
+    
+    Parameters:
+    -----------
+    test_fraction : float, optional (default=1.0)
+        Fraction of test dataset to use. Set to 0.1 for 1/10th of data, 1.0 for full dataset.
+        Useful for faster testing/debugging.
     """
     print("="*60)
     print("TREEVAE DETAILED PROBABILITY ANALYSIS WITH FASHION-MNIST")
@@ -417,6 +413,8 @@ def run_detailed_probability_analysis(configs, device, anomaly_digit=0):
     print(f"Dataset: {configs['data']['data_name']} + Fashion-MNIST")
     print(f"Anomaly Digit: {anomaly_digit}")
     print(f"Device: {device}")
+    if test_fraction < 1.0:
+        print(f"⚠️  TEST MODE: Using {test_fraction*100:.1f}% of test data ({test_fraction} fraction)")
     print("="*60)
     
     # Set anomaly digit in config
@@ -424,6 +422,21 @@ def run_detailed_probability_analysis(configs, device, anomaly_digit=0):
     
     # Create combined test set with Fashion-MNIST
     combined_testset, anomaly_labels_binary, true_labels, trainset, trainset_eval = create_combined_testset_with_fmnist(configs)
+    
+    # Subsample test dataset if test_fraction < 1.0
+    original_test_size = len(combined_testset)
+    if test_fraction < 1.0:
+        np.random.seed(configs['globals']['seed'])
+        test_size = int(len(combined_testset) * test_fraction)
+        test_indices = np.random.choice(len(combined_testset), test_size, replace=False)
+        test_indices = np.sort(test_indices)  # Keep original order
+        
+        combined_testset = Subset(combined_testset, test_indices)
+        anomaly_labels_binary = anomaly_labels_binary[test_indices]
+        true_labels = np.array(true_labels)[test_indices] if not isinstance(true_labels, np.ndarray) else true_labels[test_indices]
+        true_labels = true_labels.tolist() if isinstance(true_labels, np.ndarray) else true_labels
+        
+        print(f"Subsampled test dataset: {original_test_size} → {len(combined_testset)} samples")
     
     print(f"Training samples: {len(trainset)}")
     print(f"Test samples: {len(combined_testset)}")
@@ -506,85 +519,10 @@ def run_detailed_probability_analysis(configs, device, anomaly_digit=0):
     output_dir = f"eval_datasets/detailed_analysis_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}"
     os.makedirs(output_dir, exist_ok=True)
     
-    # Save to Excel with multiple sheets (with fallback to CSV)
-    excel_file = os.path.join(output_dir, f"detailed_probability_analysis_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.xlsx")
-    
-    try:
-        # Try to save as Excel
-        with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
-            # Sample-level data
-            sample_df.to_excel(writer, sheet_name='Sample_Summary', index=False)
-            
-            # Node-level data (all routing probabilities)
-            node_df.to_excel(writer, sheet_name='Node_Probabilities', index=False)
-            
-            # Leaf-level data (reconstruction losses)
-            leaf_df.to_excel(writer, sheet_name='Leaf_Reconstructions', index=False)
-            
-            # Create summary statistics
-            summary_stats = {
-                'Metric': [
-                    'Total Samples',
-                    'Total Nodes',
-                    'Total Leaves',
-                    'Max Depth',
-                    'Avg Final Rec Loss',
-                    'Std Final Rec Loss',
-                    'Min Final Rec Loss',
-                    'Max Final Rec Loss'
-                ],
-                'Value': [
-                    len(sample_df),
-                    len(node_df),
-                    len(leaf_df),
-                    max(node_df['depth'].max(), leaf_df['depth'].max()) if len(node_df) > 0 or len(leaf_df) > 0 else 0,
-                    sample_df['final_rec_loss'].mean(),
-                    sample_df['final_rec_loss'].std(),
-                    sample_df['final_rec_loss'].min(),
-                    sample_df['final_rec_loss'].max()
-                ]
-            }
-            summary_df = pd.DataFrame(summary_stats)
-            summary_df.to_excel(writer, sheet_name='Summary_Statistics', index=False)
-        
-        print(f"Detailed analysis saved to Excel: {excel_file}")
-        
-    except ImportError:
-        # Fallback to CSV files if openpyxl is not available
-        print("Warning: openpyxl not available, saving as CSV files instead")
-        
-        # Save each sheet as separate CSV
-        sample_df.to_csv(os.path.join(output_dir, f"sample_summary_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv"), index=False)
-        node_df.to_csv(os.path.join(output_dir, f"node_probabilities_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv"), index=False)
-        leaf_df.to_csv(os.path.join(output_dir, f"leaf_reconstructions_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv"), index=False)
-        
-        # Create summary statistics
-        summary_stats = {
-            'Metric': [
-                'Total Samples',
-                'Total Nodes',
-                'Total Leaves',
-                'Max Depth',
-                'Avg Final Rec Loss',
-                'Std Final Rec Loss',
-                'Min Final Rec Loss',
-                'Max Final Rec Loss'
-            ],
-            'Value': [
-                len(sample_df),
-                len(node_df),
-                len(leaf_df),
-                max(node_df['depth'].max(), leaf_df['depth'].max()) if len(node_df) > 0 or len(leaf_df) > 0 else 0,
-                sample_df['final_rec_loss'].mean(),
-                sample_df['final_rec_loss'].std(),
-                sample_df['final_rec_loss'].min(),
-                sample_df['final_rec_loss'].max()
-            ]
-        }
-        summary_df = pd.DataFrame(summary_stats)
-        summary_df.to_csv(os.path.join(output_dir, f"summary_statistics_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv"), index=False)
-        
-        print(f"Detailed analysis saved to CSV files in: {output_dir}")
+    # Save only two CSV files: sample summary and leaf reconstructions
+    sample_df.to_csv(os.path.join(output_dir, f"sample_summary_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv"), index=False)
+    leaf_df.to_csv(os.path.join(output_dir, f"leaf_reconstructions_digit_{anomaly_digit}_seed_{seed}_{unique_timestamp}.csv"), index=False)
+    print(f"Detailed analysis saved CSVs in: {output_dir}")
     
     # Print summary statistics
     print("\n" + "="*60)
@@ -593,9 +531,7 @@ def run_detailed_probability_analysis(configs, device, anomaly_digit=0):
     print(f"Dataset: {configs['data']['data_name']}")
     print(f"Seed: {seed}")
     print(f"Total samples: {len(sample_df)}")
-    print(f"Total nodes: {len(node_df)}")
     print(f"Total leaves: {len(leaf_df)}")
-    print(f"Max depth: {max(node_df['depth'].max(), leaf_df['depth'].max()) if len(node_df) > 0 or len(leaf_df) > 0 else 0}")
     print(f"Average final rec loss: {sample_df['final_rec_loss'].mean():.4f}")
     print(f"Std final rec loss: {sample_df['final_rec_loss'].std():.4f}")
     print(f"Results saved to: {output_dir}")
@@ -605,16 +541,13 @@ def run_detailed_probability_analysis(configs, device, anomaly_digit=0):
     print("\nSample-level data (first 5 rows):")
     print(sample_df.head())
     
-    print("\nNode-level data (first 10 rows):")
-    print(node_df.head(10))
-    
     print("\nLeaf-level data (first 5 rows):")
     print(leaf_df.head())
     
     # Finish wandb
     wandb.finish(quiet=True)
     
-    return sample_df, node_df, leaf_df, output_dir
+    return sample_df, leaf_df, output_dir
 
 
 def main():
@@ -667,6 +600,10 @@ def main():
     # Anomaly detection specific arguments
     parser.add_argument('--anomaly_digit', type=int, default=0, choices=range(10),
                         help='the digit to use as anomaly (0-9)')
+    
+    # Test dataset subsampling (for faster testing/debugging)
+    parser.add_argument('--test_fraction', type=float, default=1.0,
+                        help='Fraction of test dataset to use (0.0-1.0). Default 1.0 (full dataset). Use 0.1 for 1/10th of data.')
 
     args = parser.parse_args()
     configs = prepare_config(args, project_dir)
@@ -693,7 +630,7 @@ def main():
     
     # Run experiment
     try:
-        sample_df, node_df, leaf_df, output_dir = run_detailed_probability_analysis(configs, device, args.anomaly_digit)
+        sample_df, leaf_df, output_dir = run_detailed_probability_analysis(configs, device, args.anomaly_digit, args.test_fraction)
         
         print(f"\n🎉 Detailed analysis completed successfully!")
         print(f"📁 Results saved to: {output_dir}")

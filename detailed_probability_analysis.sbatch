@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=1               # use 1 thread per task
 #SBATCH -N 1                             # request slots on 1 node
 #SBATCH --gpus=v100:1                    # request 1 Volta V100 GPU
-#SBATCH --partition=gpuidle              # partition to use (same as before)
+#SBATCH --partition=informatik-mind             # partition to use (same as before)
 #SBATCH --output=treevae_%j_out.txt      # capture output (%j = job id)
 #SBATCH --error=treevae_%j_err.txt       # and error streams
 
@@ -20,7 +20,7 @@
 # python main.py 
 # export a unique seed each time, or use $SEED from sbatch  
 
-python detailed_probability_analysis.py --anomaly_digit 0 --seed 17   
+python detailed_probability_analysis.py --anomaly_digit 0 --seed 17    
 
 
 # conda deactivate

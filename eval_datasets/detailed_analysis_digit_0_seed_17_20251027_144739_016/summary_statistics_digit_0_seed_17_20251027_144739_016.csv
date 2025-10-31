@@ -1,0 +1,9 @@
+Metric,Value
+Total Samples,11000.0
+Total Nodes,99000.0
+Total Leaves,110000.0
+Max Depth,5.0
+Avg Final Rec Loss,157.63174438476562
+Std Final Rec Loss,150.36611938476562
+Min Final Rec Loss,23.639692306518555
+Max Final Rec Loss,1334.0286865234375
